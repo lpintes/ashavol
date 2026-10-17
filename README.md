@@ -28,6 +28,10 @@ Each event triggers several writes with growing delays so that the last write
 lands after Android's. A very short loud blip on volume change can still occur.
 
 Index 0 is left to Android (muted). Index 1..max maps linearly to `min..max` dB.
+A per-side offset (`left`, `right`, up to ±30 dB) is added, so a weaker side
+can be balanced; the side comes from the ASHA ReadOnlyProperties
+characteristic. Every written value is clamped to -127..-40 dB, so no setting
+can go above the -40 dB ceiling.
 
 ## Build
 
@@ -39,7 +43,13 @@ platform android-36; adjust `SDK` in `build.sh`.
 
 ## Use
 
-    adb shell am start -n com.example.ashavol/.MainActivity --ei min -127 --ei max -64
+Opening the app starts the service. The screen has a "Hearing devices" button,
+which opens the system page for connecting and disconnecting hearing devices,
+and rows Minimum, Maximum, Left and Right, each with "Quieter" and "Louder"
+buttons in 1 dB steps. Changes apply immediately. The same values can be set
+from adb:
+
+    adb shell am start -n com.example.ashavol/.MainActivity --ei min -127 --ei max -64 --ei left 3 --ei right 0
     adb shell am start -n com.example.ashavol/.MainActivity --ez stop true
 
 The table is stored and reused on later starts. Log tag: `AshaVol`.

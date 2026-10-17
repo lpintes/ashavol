@@ -133,20 +133,12 @@ public class VolumeService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // MainActivity writes the tuning to prefs before starting the service.
         SharedPreferences p = prefs(this);
-        if (intent != null) {
-            SharedPreferences.Editor e = p.edit();
-            for (String key : TUNING_KEYS) {
-                if (intent.hasExtra(key)) {
-                    e.putInt(key, intent.getIntExtra(key, 0));
-                }
-            }
-            e.apply();
-        }
-        minDb = clampDb(p.getInt("min", -127));
-        maxDb = clampDb(p.getInt("max", -95));
-        leftOffsetDb = clampOffset(p.getInt("left", 0));
-        rightOffsetDb = clampOffset(p.getInt("right", 0));
+        minDb = tuning(p, "min");
+        maxDb = tuning(p, "max");
+        leftOffsetDb = tuning(p, "left");
+        rightOffsetDb = tuning(p, "right");
         Log.i(TAG, "table min=" + minDb + " max=" + maxDb
                 + " left=" + leftOffsetDb + " right=" + rightOffsetDb);
         scheduleWrites("start");
@@ -179,6 +171,18 @@ public class VolumeService extends Service {
 
     static int clampOffset(int db) {
         return Math.max(-MAX_OFFSET_DB, Math.min(MAX_OFFSET_DB, db));
+    }
+
+    /** One of {@link #TUNING_KEYS} from prefs, with its default and clamped. */
+    static int tuning(SharedPreferences p, String key) {
+        switch (key) {
+            case "min":
+                return clampDb(p.getInt(key, -127));
+            case "max":
+                return clampDb(p.getInt(key, -95));
+            default:
+                return clampOffset(p.getInt(key, 0));
+        }
     }
 
     /** Offset for one device; an unknown side gets the quieter of the two. */

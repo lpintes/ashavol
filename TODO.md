@@ -1,7 +1,5 @@
 # TODO
 
-- Tune the volume table from the phone: a simple accessible UI for `min` and
-  `max` (or a per-index table), usable with Corvus.
 - Consider a non-linear table if 4.5 dB linear steps feel uneven.
 - Replace the `com.example.ashavol` package name (requires uninstall, the
   stored table is lost).

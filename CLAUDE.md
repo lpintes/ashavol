@@ -48,8 +48,14 @@ Three classes, no Gradle:
   (`VolumeService.prefs`), readable before the first unlock. Older versions
   kept them in normal storage; `migratePrefs` moves them (verified). All state
   is touched on the main thread; GATT callbacks post to the handler.
-- `MainActivity` — only starts/stops the service and passes `min`/`max`.
-  Stores pref `enabled` (true on start, false on `--ez stop true`).
+- `MainActivity` — starts/stops the service and is the settings screen:
+  rows Minimum, Maximum, Left, Right with "Quieter"/"Louder" buttons in 1 dB
+  steps (keeps `min <= max`), plus a "Hearing devices" button. It writes the
+  tuning (buttons and adb extras alike) straight to prefs, then starts the
+  service, which rereads them through `VolumeService.tuning`. Stores pref
+  `enabled` (true on start, false on `--ez stop true`); a button press
+  restarts the service only if `enabled` is set. Each value row is a polite
+  live region; Corvus announces it only sometimes, the user accepts that.
 - `BootReceiver` — on `LOCKED_BOOT_COMPLETED`, `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED` starts the service if `enabled` is set. Receiver and
   service are `directBootAware`, because ASHA streams on the lock screen
@@ -83,6 +89,13 @@ Three classes, no Gradle:
   difference. When testing by listening, note that every `am start` brings
   `MainActivity` to front and Corvus reads it aloud over the stream, which
   masks the change; compare A/B at a fixed index instead.
+- An app cannot connect or disconnect the hearing devices without root
+  (`BluetoothHearingAid.connect/disconnect` and `setConnectionPolicy` need
+  `BLUETOOTH_PRIVILEGED`). The non-public action
+  `android.settings.HEARING_DEVICES_SETTINGS` opens the system page that can,
+  and an app may start it; it needs `FLAG_ACTIVITY_NEW_TASK | CLEAR_TASK`,
+  otherwise an open Settings task only comes to front on its old page.
+- With offsets the user's balance is left +3 dB, right 0.
 - Our ASHA volume writes do not affect the TV Streamer volume; the two are
   independent (verified by listening).
 - `adb shell cmd media_session volume --stream 3 --set 0` does not change the
