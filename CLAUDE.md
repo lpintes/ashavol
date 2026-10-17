@@ -40,6 +40,10 @@ Three classes, no Gradle:
   - `AudioDeviceCallback` adding `TYPE_HEARING_AID`, services discovered,
     playback start, service start.
   Index 0 is left to Android. Index 1..max maps linearly to `min..max` dB,
+  plus a per-side offset `left`/`right` (side from bit 0 of byte 1 of the ASHA
+  ReadOnlyProperties characteristic, read before the device counts as ready;
+  an unknown side gets the quieter offset). Every written value is clamped to
+  `MIN_DB..MAX_DB` (-127..-40), so no setting can exceed the ceiling. Values are
   stored in SharedPreferences `ashavol` in device-protected storage
   (`VolumeService.prefs`), readable before the first unlock. Older versions
   kept them in normal storage; `migratePrefs` moves them (verified). All state
@@ -75,6 +79,10 @@ Three classes, no Gradle:
   remain; the user accepts them. Fully fixing this needs root (e.g. an LSPosed
   hook on `BluetoothHearingAid.setVolume`).
 - Nucleus Smart has no streaming level setting for ASHA.
+- Per-side offsets work: right 0 vs -30 dB at index 8 is a big audible
+  difference. When testing by listening, note that every `am start` brings
+  `MainActivity` to front and Corvus reads it aloud over the stream, which
+  masks the change; compare A/B at a fixed index instead.
 - Our ASHA volume writes do not affect the TV Streamer volume; the two are
   independent (verified by listening).
 - `adb shell cmd media_session volume --stream 3 --set 0` does not change the

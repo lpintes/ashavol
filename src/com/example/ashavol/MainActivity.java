@@ -15,7 +15,7 @@ import android.widget.TextView;
  * Starts or stops {@link VolumeService} and shows its volume table.
  *
  * Usage:
- *   adb shell am start -n com.example.ashavol/.MainActivity --ei min -127 --ei max -95
+ *   adb shell am start -n com.example.ashavol/.MainActivity --ei min -127 --ei max -95 --ei left 0 --ei right 0
  *   adb shell am start -n com.example.ashavol/.MainActivity --ez stop true
  */
 public class MainActivity extends Activity {
@@ -59,18 +59,19 @@ public class MainActivity extends Activity {
             status.setText("ASHA volume override stopped");
             return;
         }
-        if (intent.hasExtra("min")) {
-            svc.putExtra("min", intent.getIntExtra("min", -127));
-        }
-        if (intent.hasExtra("max")) {
-            svc.putExtra("max", intent.getIntExtra("max", -95));
+        for (String key : VolumeService.TUNING_KEYS) {
+            if (intent.hasExtra(key)) {
+                svc.putExtra(key, intent.getIntExtra(key, 0));
+            }
         }
         // BootReceiver restarts the service only if it was left running.
         p.edit().putBoolean("enabled", true).apply();
         startForegroundService(svc);
         status.setText("ASHA volume override running, table "
-                + svc.getIntExtra("min", p.getInt("min", -127)) + " to "
-                + svc.getIntExtra("max", p.getInt("max", -95)) + " dB");
+                + VolumeService.clampDb(svc.getIntExtra("min", p.getInt("min", -127))) + " to "
+                + VolumeService.clampDb(svc.getIntExtra("max", p.getInt("max", -95)))
+                + " dB, left " + svc.getIntExtra("left", p.getInt("left", 0))
+                + " dB, right " + svc.getIntExtra("right", p.getInt("right", 0)) + " dB");
         // Motorola's freezer stops the service while the screen is off unless the app
         // is exempt from battery optimization; Android's volume then goes through.
         if (!getSystemService(PowerManager.class).isIgnoringBatteryOptimizations(

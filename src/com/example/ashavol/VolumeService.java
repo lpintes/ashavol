@@ -44,8 +44,11 @@ import java.util.UUID;
  * it lands after Android's write.
  *
  * Intent extras for tuning (via the activity):
- *   min  dB written at index 1 (default -127)
- *   max  dB written at the top index (default -95)
+ *   min    dB written at index 1 (default -127)
+ *   max    dB written at the top index (default -95)
+ *   left   dB added for the left device (default 0)
+ *   right  dB added for the right device (default 0)
+ * Every written value is clamped to MIN_DB..MAX_DB.
  */
 public class VolumeService extends Service {
     static final String TAG = "AshaVol";
@@ -58,6 +61,15 @@ public class VolumeService extends Service {
     // The device notifies this after every Start command, which carries Android's volume.
     private static final UUID AUDIO_STATUS_CHAR =
             UUID.fromString("38663f1a-e711-4cac-b641-326b56404837");
+    // Byte 1 is DeviceCapabilities; bit 0 set means the right side.
+    private static final UUID PROPERTIES_CHAR =
+            UUID.fromString("6333651e-c481-4a3e-9169-7c902aad37bb");
+    // -128 is mute, which belongs to index 0 only.
+    static final int MIN_DB = -127;
+    // Safety ceiling; Android's own -42 dB at index 1 is already far too loud here.
+    static final int MAX_DB = -40;
+    static final int MAX_OFFSET_DB = 30;
+    static final String[] TUNING_KEYS = {"min", "max", "left", "right"};
     private static final String VOLUME_CHANGED = "android.media.VOLUME_CHANGED_ACTION";
     private static final long[] RETRY_DELAYS_MS = {15, 30, 50, 80, 120, 300, 1000, 2500};
     // VOLUME_CHANGED_ACTION arrives ~0.5 s after Android's own write, so the index is
@@ -68,9 +80,13 @@ public class VolumeService extends Service {
     // Accessed only on the main thread.
     private final Map<String, BluetoothGatt> gatts = new HashMap<>();
     private final Map<String, BluetoothGattCharacteristic> volumeChars = new HashMap<>();
+    // true = right; missing until ReadOnlyProperties has been read.
+    private final Map<String, Boolean> rightSide = new HashMap<>();
     private AudioManager audio;
     private int minDb;
     private int maxDb;
+    private int leftOffsetDb;
+    private int rightOffsetDb;
     private boolean wasPlaying;
     private int lastIndex = -1;
 
@@ -118,15 +134,21 @@ public class VolumeService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         SharedPreferences p = prefs(this);
-        if (intent != null && (intent.hasExtra("min") || intent.hasExtra("max"))) {
-            p.edit()
-                    .putInt("min", clampDb(intent.getIntExtra("min", p.getInt("min", -127))))
-                    .putInt("max", clampDb(intent.getIntExtra("max", p.getInt("max", -95))))
-                    .apply();
+        if (intent != null) {
+            SharedPreferences.Editor e = p.edit();
+            for (String key : TUNING_KEYS) {
+                if (intent.hasExtra(key)) {
+                    e.putInt(key, intent.getIntExtra(key, 0));
+                }
+            }
+            e.apply();
         }
-        minDb = p.getInt("min", -127);
-        maxDb = p.getInt("max", -95);
-        Log.i(TAG, "table min=" + minDb + " max=" + maxDb);
+        minDb = clampDb(p.getInt("min", -127));
+        maxDb = clampDb(p.getInt("max", -95));
+        leftOffsetDb = clampOffset(p.getInt("left", 0));
+        rightOffsetDb = clampOffset(p.getInt("right", 0));
+        Log.i(TAG, "table min=" + minDb + " max=" + maxDb
+                + " left=" + leftOffsetDb + " right=" + rightOffsetDb);
         scheduleWrites("start");
         return START_STICKY;
     }
@@ -142,6 +164,7 @@ public class VolumeService extends Service {
         }
         gatts.clear();
         volumeChars.clear();
+        rightSide.clear();
         super.onDestroy();
     }
 
@@ -150,8 +173,21 @@ public class VolumeService extends Service {
         return null;
     }
 
-    private static int clampDb(int db) {
-        return Math.max(-128, Math.min(0, db));
+    static int clampDb(int db) {
+        return Math.max(MIN_DB, Math.min(MAX_DB, db));
+    }
+
+    static int clampOffset(int db) {
+        return Math.max(-MAX_OFFSET_DB, Math.min(MAX_OFFSET_DB, db));
+    }
+
+    /** Offset for one device; an unknown side gets the quieter of the two. */
+    private int offsetDb(String addr) {
+        Boolean right = rightSide.get(addr);
+        if (right == null) {
+            return Math.min(leftOffsetDb, rightOffsetDb);
+        }
+        return right ? rightOffsetDb : leftOffsetDb;
     }
 
     /** Maps the current music index to dB; null means leave Android's value alone. */
@@ -195,15 +231,15 @@ public class VolumeService extends Service {
         if (db == null) {
             return;
         }
-        byte[] value = new byte[] {(byte) (int) db};
         for (Map.Entry<String, BluetoothGattCharacteristic> e : volumeChars.entrySet()) {
             BluetoothGatt g = gatts.get(e.getKey());
             if (g == null) {
                 continue;
             }
-            int rc = g.writeCharacteristic(e.getValue(), value,
+            int v = clampDb(db + offsetDb(e.getKey()));
+            int rc = g.writeCharacteristic(e.getValue(), new byte[] {(byte) v},
                     BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
-            Log.i(TAG, "write " + db + " to " + e.getKey() + " rc=" + rc);
+            Log.i(TAG, "write " + v + " to " + e.getKey() + " rc=" + rc);
         }
     }
 
@@ -257,6 +293,11 @@ public class VolumeService extends Service {
         }
     };
 
+    private void markReady(String addr, BluetoothGattCharacteristic volume) {
+        volumeChars.put(addr, volume);
+        scheduleWrites(addr + " ready");
+    }
+
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int st, int newState) {
@@ -285,9 +326,32 @@ public class VolumeService extends Service {
             // only makes the notifications reach this app too.
             boolean subscribed = status != null && gatt.setCharacteristicNotification(status, true);
             Log.i(TAG, addr + " audio status notifications " + subscribed);
+            // Writes wait for the side so that each device gets its own offset;
+            // a pending read would also make the writes fail as busy.
+            BluetoothGattCharacteristic props = s.getCharacteristic(PROPERTIES_CHAR);
+            if (props == null || !gatt.readCharacteristic(props)) {
+                Log.w(TAG, addr + ": cannot read ASHA properties, side unknown");
+                handler.post(() -> markReady(addr, c));
+            }
+        }
+
+        @Override
+        public void onCharacteristicRead(BluetoothGatt gatt,
+                BluetoothGattCharacteristic c, byte[] value, int st) {
+            if (!PROPERTIES_CHAR.equals(c.getUuid())) {
+                return;
+            }
+            String addr = gatt.getDevice().getAddress();
+            BluetoothGattCharacteristic vol = c.getService().getCharacteristic(VOLUME_CHAR);
+            Boolean right = st == BluetoothGatt.GATT_SUCCESS && value.length > 1
+                    ? (value[1] & 1) != 0 : null;
+            Log.i(TAG, addr + " side " + (right == null ? "unknown, status " + st
+                    : right ? "right" : "left"));
             handler.post(() -> {
-                volumeChars.put(addr, c);
-                scheduleWrites(addr + " ready");
+                if (right != null) {
+                    rightSide.put(addr, right);
+                }
+                markReady(addr, vol);
             });
         }
 
