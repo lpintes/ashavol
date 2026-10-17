@@ -5,7 +5,10 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.widget.TextView;
 
 /**
@@ -64,5 +67,12 @@ public class MainActivity extends Activity {
         status.setText("ASHA volume override running, table "
                 + svc.getIntExtra("min", p.getInt("min", -127)) + " to "
                 + svc.getIntExtra("max", p.getInt("max", -95)) + " dB");
+        // Motorola's freezer stops the service while the screen is off unless the app
+        // is exempt from battery optimization; Android's volume then goes through.
+        if (!getSystemService(PowerManager.class).isIgnoringBatteryOptimizations(
+                getPackageName())) {
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+        }
     }
 }

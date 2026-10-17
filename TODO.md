@@ -13,3 +13,6 @@
 - Handle Bluetooth being turned off and on (GATT objects may need recreating),
   and newly bonded processors without restarting the service.
 - Optional: notification action to stop the override.
+- Watch whether Motorola still kills the service ("Foreground kill") now that
+  it has the battery exemption. If it does, add a safety net, e.g. a Tasker
+  task that starts `MainActivity` (or the service) every few minutes.

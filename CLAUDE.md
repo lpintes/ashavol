@@ -66,6 +66,16 @@ Two classes, no Gradle:
 - Nucleus Smart has no streaming level setting for ASHA.
 - `adb shell cmd media_session volume --stream 3 --set 0` does not change the
   hearing aid index; the user has to press the volume keys.
+- Motorola's "moto_freezer" freezes the process ~10 s after screen off even
+  though it runs a foreground service (`freezing ... reason=moto_freezer,
+  adj=200, adjType=fg-service`). Volume changes then go through at Android's
+  level until the screen turns on. An exemption from battery optimization
+  (deviceidle user whitelist) stops this; `MainActivity` asks for it.
+  Manually: `adb shell dumpsys deviceidle whitelist +com.example.ashavol`.
+- Motorola also kills idle processes, including foreground services and TTS
+  engines: `am_uid_stopped` then `am_kill ... Foreground kill`. It acts like a
+  force stop, so `START_STICKY` does not bring the service back. Not yet known
+  whether the battery exemption prevents it.
 
 ## Build, install, debug
 
