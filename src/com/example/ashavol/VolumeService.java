@@ -74,6 +74,23 @@ public class VolumeService extends Service {
     private boolean wasPlaying;
     private int lastIndex = -1;
 
+    /**
+     * Prefs live in device-protected storage so that the service can read the
+     * table before the first unlock; ASHA already streams on the lock screen.
+     */
+    static SharedPreferences prefs(Context context) {
+        return context.createDeviceProtectedStorageContext()
+                .getSharedPreferences(PREFS, MODE_PRIVATE);
+    }
+
+    /** Moves prefs written by older versions to device-protected storage. Needs an unlocked user. */
+    static void migratePrefs(Context context) {
+        if (!context.createDeviceProtectedStorageContext()
+                .moveSharedPreferencesFrom(context, PREFS)) {
+            Log.w(TAG, "moving prefs to device-protected storage failed");
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -100,7 +117,7 @@ public class VolumeService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        SharedPreferences p = prefs(this);
         if (intent != null && (intent.hasExtra("min") || intent.hasExtra("max"))) {
             p.edit()
                     .putInt("min", clampDb(intent.getIntExtra("min", p.getInt("min", -127))))

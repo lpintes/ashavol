@@ -40,15 +40,20 @@ Three classes, no Gradle:
   - `AudioDeviceCallback` adding `TYPE_HEARING_AID`, services discovered,
     playback start, service start.
   Index 0 is left to Android. Index 1..max maps linearly to `min..max` dB,
-  stored in SharedPreferences `ashavol`. All state is touched on the main
-  thread; GATT callbacks post to the handler.
+  stored in SharedPreferences `ashavol` in device-protected storage
+  (`VolumeService.prefs`), readable before the first unlock. Older versions
+  kept them in normal storage; `migratePrefs` moves them (verified). All state
+  is touched on the main thread; GATT callbacks post to the handler.
 - `MainActivity` — only starts/stops the service and passes `min`/`max`.
   Stores pref `enabled` (true on start, false on `--ez stop true`).
-- `BootReceiver` — on `BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` starts the
-  service if `enabled` is set. Android 15 still allows a `connectedDevice`
-  foreground service from `BOOT_COMPLETED` (the ban covers dataSync, camera,
-  mediaPlayback, phoneCall, mediaProjection, microphone). Verified on the
-  phone after a reboot: the service starts after the first unlock.
+- `BootReceiver` — on `LOCKED_BOOT_COMPLETED`, `BOOT_COMPLETED` and
+  `MY_PACKAGE_REPLACED` starts the service if `enabled` is set. Receiver and
+  service are `directBootAware`, because ASHA streams on the lock screen
+  (Corvus speaks there) before the first unlock. Android 15 still allows a
+  `connectedDevice` foreground service from boot (the ban covers dataSync,
+  camera, mediaPlayback, phoneCall, mediaProjection, microphone). Verified
+  after a reboot: the service starts at `LOCKED_BOOT_COMPLETED`, ~3 s after
+  the screen comes up and before the PIN, and the lock screen speech is quiet.
 
 ## Verified facts (do not re-derive)
 

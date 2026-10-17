@@ -51,7 +51,8 @@ public class MainActivity extends Activity {
             return;
         }
         Intent svc = new Intent(this, VolumeService.class);
-        SharedPreferences p = getSharedPreferences(VolumeService.PREFS, MODE_PRIVATE);
+        VolumeService.migratePrefs(this);
+        SharedPreferences p = VolumeService.prefs(this);
         if (intent.getBooleanExtra("stop", false)) {
             p.edit().putBoolean("enabled", false).apply();
             stopService(svc);

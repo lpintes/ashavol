@@ -1,11 +1,5 @@
 # TODO
 
-- Run before the first unlock after boot. Today the service starts only at
-  `BOOT_COMPLETED` (after the PIN), so the processors get Android's loud
-  volume until then; the user turns Bluetooth off before rebooting. Option:
-  `directBootAware`, `LOCKED_BOOT_COMPLETED` and prefs in device-protected
-  storage. Check whether Bluetooth and the hearing aid profile already run
-  before unlock.
 - Tune the volume table from the phone: a simple accessible UI for `min` and
   `max` (or a per-index table), usable with Corvus.
 - Consider a non-linear table if 4.5 dB linear steps feel uneven.
