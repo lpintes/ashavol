@@ -6,8 +6,6 @@
 - Replace the `com.example.ashavol` package name (requires uninstall, the
   stored table is lost).
 - Check battery usage of the 20 ms polling in Android battery stats.
-- Verify behaviour while the processors listen to the TV Streamer: our writes
-  must not change the TV Streamer volume.
 - Handle Bluetooth being turned off and on (GATT objects may need recreating),
   and newly bonded processors without restarting the service.
 - Optional: notification action to stop the override.

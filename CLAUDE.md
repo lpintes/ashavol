@@ -75,6 +75,8 @@ Three classes, no Gradle:
   remain; the user accepts them. Fully fixing this needs root (e.g. an LSPosed
   hook on `BluetoothHearingAid.setVolume`).
 - Nucleus Smart has no streaming level setting for ASHA.
+- Our ASHA volume writes do not affect the TV Streamer volume; the two are
+  independent (verified by listening).
 - `adb shell cmd media_session volume --stream 3 --set 0` does not change the
   hearing aid index; the user has to press the volume keys.
 - Motorola's "moto_freezer" freezes the process ~10 s after screen off even
