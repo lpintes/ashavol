@@ -27,7 +27,7 @@ are in `TODO.md`.
 
 ## Architecture
 
-Two classes, no Gradle:
+Three classes, no Gradle:
 
 - `VolumeService` — foreground service (type `connectedDevice`). Owns a GATT
   connection (`autoConnect=true`) to each bonded LE device whose name contains
@@ -43,6 +43,12 @@ Two classes, no Gradle:
   stored in SharedPreferences `ashavol`. All state is touched on the main
   thread; GATT callbacks post to the handler.
 - `MainActivity` — only starts/stops the service and passes `min`/`max`.
+  Stores pref `enabled` (true on start, false on `--ez stop true`).
+- `BootReceiver` — on `BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` starts the
+  service if `enabled` is set. Android 15 still allows a `connectedDevice`
+  foreground service from `BOOT_COMPLETED` (the ban covers dataSync, camera,
+  mediaPlayback, phoneCall, mediaProjection, microphone). Verified on the
+  phone after a reboot: the service starts after the first unlock.
 
 ## Verified facts (do not re-derive)
 
@@ -87,8 +93,9 @@ Two classes, no Gradle:
 `build.sh` has the SDK path hard-coded (scoop `android-clt`, build-tools
 36.0.0, platform android-36). Run it from Git Bash. `debug.keystore` is not in
 git but must be kept: the installed app is signed with it, a new key would
-force an uninstall. `adb install -r` kills the service; start it again with
-`am start`.
+force an uninstall. `adb install -r` kills the service; `BootReceiver`
+restarts it within about a second if it was enabled (verified), otherwise
+start it with `am start`.
 
 Useful when diagnosing timing:
 

@@ -51,7 +51,9 @@ public class MainActivity extends Activity {
             return;
         }
         Intent svc = new Intent(this, VolumeService.class);
+        SharedPreferences p = getSharedPreferences(VolumeService.PREFS, MODE_PRIVATE);
         if (intent.getBooleanExtra("stop", false)) {
+            p.edit().putBoolean("enabled", false).apply();
             stopService(svc);
             status.setText("ASHA volume override stopped");
             return;
@@ -62,8 +64,9 @@ public class MainActivity extends Activity {
         if (intent.hasExtra("max")) {
             svc.putExtra("max", intent.getIntExtra("max", -95));
         }
+        // BootReceiver restarts the service only if it was left running.
+        p.edit().putBoolean("enabled", true).apply();
         startForegroundService(svc);
-        SharedPreferences p = getSharedPreferences(VolumeService.PREFS, MODE_PRIVATE);
         status.setText("ASHA volume override running, table "
                 + svc.getIntExtra("min", p.getInt("min", -127)) + " to "
                 + svc.getIntExtra("max", p.getInt("max", -95)) + " dB");
