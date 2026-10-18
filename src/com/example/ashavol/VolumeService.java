@@ -125,6 +125,8 @@ public class VolumeService extends Service {
 
         registerReceiver(volumeReceiver, new IntentFilter(VOLUME_CHANGED),
                 Context.RECEIVER_EXPORTED);
+        registerReceiver(bondReceiver, new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
+                Context.RECEIVER_EXPORTED);
         audio.registerAudioPlaybackCallback(playbackCallback, handler);
         audio.registerAudioDeviceCallback(deviceCallback, handler);
         connectAll();
@@ -149,6 +151,7 @@ public class VolumeService extends Service {
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         unregisterReceiver(volumeReceiver);
+        unregisterReceiver(bondReceiver);
         audio.unregisterAudioPlaybackCallback(playbackCallback);
         audio.unregisterAudioDeviceCallback(deviceCallback);
         for (BluetoothGatt g : gatts.values()) {
@@ -247,19 +250,55 @@ public class VolumeService extends Service {
         }
     }
 
+    /** Connects every bonded hearing device that has no GATT client yet. */
     private void connectAll() {
         BluetoothAdapter adapter = getSystemService(BluetoothManager.class).getAdapter();
         for (BluetoothDevice d : adapter.getBondedDevices()) {
-            String name = d.getName();
-            if (d.getType() == BluetoothDevice.DEVICE_TYPE_LE && name != null
-                    && name.contains("Hearing")) {
-                Log.i(TAG, "connecting " + d.getAddress() + " " + name);
-                // autoConnect lets the stack reconnect us whenever the device comes back.
-                gatts.put(d.getAddress(),
-                        d.connectGatt(this, true, gattCallback, BluetoothDevice.TRANSPORT_LE));
-            }
+            connect(d);
         }
     }
+
+    private void connect(BluetoothDevice d) {
+        String name = d.getName();
+        if (d.getType() != BluetoothDevice.DEVICE_TYPE_LE || name == null
+                || !name.contains("Hearing") || gatts.containsKey(d.getAddress())) {
+            return;
+        }
+        Log.i(TAG, "connecting " + d.getAddress() + " " + name);
+        // autoConnect lets the stack reconnect us whenever the device comes back.
+        gatts.put(d.getAddress(),
+                d.connectGatt(this, true, gattCallback, BluetoothDevice.TRANSPORT_LE));
+    }
+
+    private void forget(String addr) {
+        BluetoothGatt g = gatts.remove(addr);
+        if (g == null) {
+            return;
+        }
+        Log.i(TAG, "forgetting " + addr);
+        g.close();
+        volumeChars.remove(addr);
+        rightSide.remove(addr);
+    }
+
+    // Re-pairing the processors (e.g. after a Nucleus Smart update) removes the old
+    // bonds and creates new ones while the service keeps running.
+    private final BroadcastReceiver bondReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE,
+                    BluetoothDevice.class);
+            int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1);
+            if (d == null) {
+                return;
+            }
+            if (state == BluetoothDevice.BOND_BONDED) {
+                connect(d);
+            } else if (state == BluetoothDevice.BOND_NONE) {
+                forget(d.getAddress());
+            }
+        }
+    };
 
     private final BroadcastReceiver volumeReceiver = new BroadcastReceiver() {
         @Override
@@ -290,6 +329,8 @@ public class VolumeService extends Service {
         public void onAudioDevicesAdded(AudioDeviceInfo[] added) {
             for (AudioDeviceInfo d : added) {
                 if (d.getType() == AudioDeviceInfo.TYPE_HEARING_AID) {
+                    // Catches a newly bonded device whose name was not known at bond time.
+                    connectAll();
                     scheduleWrites("hearing aid output added");
                     return;
                 }

@@ -31,7 +31,8 @@ Three classes, no Gradle:
 
 - `VolumeService` — foreground service (type `connectedDevice`). Owns a GATT
   connection (`autoConnect=true`) to each bonded LE device whose name contains
-  "Hearing", and writes a signed byte to the ASHA Volume characteristic with
+  "Hearing" (at start, on `ACTION_BOND_STATE_CHANGED` to BONDED, and when a
+  `TYPE_HEARING_AID` output appears; BOND_NONE closes the client), and writes a signed byte to the ASHA Volume characteristic with
   `WRITE_TYPE_NO_RESPONSE`. Triggers, each followed by a burst of retries
   (`RETRY_DELAYS_MS`):
   - polling `getStreamVolume(STREAM_MUSIC)` every `POLL_MS` (immediate write on change),
