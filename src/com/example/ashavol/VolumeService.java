@@ -26,11 +26,15 @@ import android.media.AudioPlaybackConfiguration;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -75,6 +79,11 @@ public class VolumeService extends Service {
     // VOLUME_CHANGED_ACTION arrives ~0.5 s after Android's own write, so the index is
     // also polled. The handler clock stops in deep sleep, so this costs nothing then.
     private static final long POLL_MS = 20;
+    // The stack sometimes drops our autoConnect request when the processors restart,
+    // so a client that stays disconnected is recreated.
+    private static final long CHECK_MS = 60_000;
+    private static final long CHECK_AFTER_EVENT_MS = 5_000;
+    private static final long RECONNECT_GRACE_MS = 10_000;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     // Accessed only on the main thread.
@@ -82,6 +91,9 @@ public class VolumeService extends Service {
     private final Map<String, BluetoothGattCharacteristic> volumeChars = new HashMap<>();
     // true = right; missing until ReadOnlyProperties has been read.
     private final Map<String, Boolean> rightSide = new HashMap<>();
+    private final Set<String> connected = new HashSet<>();
+    // elapsedRealtime of the last connectGatt per address.
+    private final Map<String, Long> connectStartedAt = new HashMap<>();
     private AudioManager audio;
     private int minDb;
     private int maxDb;
@@ -127,10 +139,13 @@ public class VolumeService extends Service {
                 Context.RECEIVER_EXPORTED);
         registerReceiver(bondReceiver, new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
                 Context.RECEIVER_EXPORTED);
+        registerReceiver(aclReceiver, new IntentFilter(BluetoothDevice.ACTION_ACL_CONNECTED),
+                Context.RECEIVER_EXPORTED);
         audio.registerAudioPlaybackCallback(playbackCallback, handler);
         audio.registerAudioDeviceCallback(deviceCallback, handler);
         connectAll();
         handler.post(pollRunnable);
+        handler.postDelayed(checkRunnable, CHECK_MS);
     }
 
     @Override
@@ -152,6 +167,7 @@ public class VolumeService extends Service {
         handler.removeCallbacksAndMessages(null);
         unregisterReceiver(volumeReceiver);
         unregisterReceiver(bondReceiver);
+        unregisterReceiver(aclReceiver);
         audio.unregisterAudioPlaybackCallback(playbackCallback);
         audio.unregisterAudioDeviceCallback(deviceCallback);
         for (BluetoothGatt g : gatts.values()) {
@@ -160,6 +176,8 @@ public class VolumeService extends Service {
         gatts.clear();
         volumeChars.clear();
         rightSide.clear();
+        connected.clear();
+        connectStartedAt.clear();
         super.onDestroy();
     }
 
@@ -268,6 +286,7 @@ public class VolumeService extends Service {
         // autoConnect lets the stack reconnect us whenever the device comes back.
         gatts.put(d.getAddress(),
                 d.connectGatt(this, true, gattCallback, BluetoothDevice.TRANSPORT_LE));
+        connectStartedAt.put(d.getAddress(), SystemClock.elapsedRealtime());
     }
 
     private void forget(String addr) {
@@ -279,7 +298,57 @@ public class VolumeService extends Service {
         g.close();
         volumeChars.remove(addr);
         rightSide.remove(addr);
+        connected.remove(addr);
+        connectStartedAt.remove(addr);
     }
+
+    /**
+     * Recreates every client that is not connected and has had time to connect.
+     * Seen in practice: after the processors restarted, our client stayed registered
+     * but the stack had no pending autoConnect for it any more, while the link itself
+     * was up. Recreating a client of a device that is out of range is harmless.
+     */
+    private void checkConnections() {
+        long now = SystemClock.elapsedRealtime();
+        for (String addr : new ArrayList<>(gatts.keySet())) {
+            Long started = connectStartedAt.get(addr);
+            if (connected.contains(addr)
+                    || (started != null && now - started < RECONNECT_GRACE_MS)) {
+                continue;
+            }
+            BluetoothDevice d = gatts.get(addr).getDevice();
+            Log.i(TAG, addr + " not connected, recreating client");
+            forget(addr);
+            connect(d);
+        }
+        connectAll();
+    }
+
+    private final Runnable checkRunnable = new Runnable() {
+        @Override
+        public void run() {
+            checkConnections();
+            handler.postDelayed(this, CHECK_MS);
+        }
+    };
+
+    private void scheduleCheck() {
+        handler.removeCallbacks(checkRunnable);
+        handler.postDelayed(checkRunnable, CHECK_AFTER_EVENT_MS);
+    }
+
+    // A hearing device link coming up is the moment our client should connect too.
+    private final BroadcastReceiver aclReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE,
+                    BluetoothDevice.class);
+            if (d != null && gatts.containsKey(d.getAddress())) {
+                Log.i(TAG, d.getAddress() + " link up");
+                scheduleCheck();
+            }
+        }
+    };
 
     // Re-pairing the processors (e.g. after a Nucleus Smart update) removes the old
     // bonds and creates new ones while the service keeps running.
@@ -331,6 +400,7 @@ public class VolumeService extends Service {
                 if (d.getType() == AudioDeviceInfo.TYPE_HEARING_AID) {
                     // Catches a newly bonded device whose name was not known at bond time.
                     connectAll();
+                    scheduleCheck();
                     scheduleWrites("hearing aid output added");
                     return;
                 }
@@ -338,7 +408,11 @@ public class VolumeService extends Service {
         }
     };
 
-    private void markReady(String addr, BluetoothGattCharacteristic volume) {
+    private void markReady(BluetoothGatt gatt, BluetoothGattCharacteristic volume) {
+        String addr = gatt.getDevice().getAddress();
+        if (gatts.get(addr) != gatt) {
+            return;
+        }
         volumeChars.put(addr, volume);
         scheduleWrites(addr + " ready");
     }
@@ -349,9 +423,15 @@ public class VolumeService extends Service {
             String addr = gatt.getDevice().getAddress();
             Log.i(TAG, addr + " state=" + newState + " status=" + st);
             handler.post(() -> {
+                // A client closed by checkConnections may still have a callback queued.
+                if (gatts.get(addr) != gatt) {
+                    return;
+                }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    connected.add(addr);
                     gatt.discoverServices();
                 } else {
+                    connected.remove(addr);
                     volumeChars.remove(addr);
                 }
             });
@@ -376,7 +456,7 @@ public class VolumeService extends Service {
             BluetoothGattCharacteristic props = s.getCharacteristic(PROPERTIES_CHAR);
             if (props == null || !gatt.readCharacteristic(props)) {
                 Log.w(TAG, addr + ": cannot read ASHA properties, side unknown");
-                handler.post(() -> markReady(addr, c));
+                handler.post(() -> markReady(gatt, c));
             }
         }
 
@@ -393,10 +473,13 @@ public class VolumeService extends Service {
             Log.i(TAG, addr + " side " + (right == null ? "unknown, status " + st
                     : right ? "right" : "left"));
             handler.post(() -> {
+                if (gatts.get(addr) != gatt) {
+                    return;
+                }
                 if (right != null) {
                     rightSide.put(addr, right);
                 }
-                markReady(addr, vol);
+                markReady(gatt, vol);
             });
         }
 
