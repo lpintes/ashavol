@@ -77,7 +77,9 @@ public class VolumeService extends Service {
     private static final String VOLUME_CHANGED = "android.media.VOLUME_CHANGED_ACTION";
     private static final long[] RETRY_DELAYS_MS = {15, 30, 50, 80, 120, 300, 1000, 2500};
     // VOLUME_CHANGED_ACTION arrives ~0.5 s after Android's own write, so the index is
-    // also polled. The handler clock stops in deep sleep, so this costs nothing then.
+    // also polled, but only while something plays to a hearing aid output: a blip is
+    // audible only then. Polling all the time kept the CPU busy with the screen off
+    // and drained the battery (37 % overnight).
     private static final long POLL_MS = 20;
     // The stack sometimes drops our autoConnect request when the processors restart,
     // so a client that stays disconnected is recreated.
@@ -100,6 +102,8 @@ public class VolumeService extends Service {
     private int leftOffsetDb;
     private int rightOffsetDb;
     private boolean wasPlaying;
+    private boolean hearingAidOutput;
+    private boolean polling;
     private int lastIndex = -1;
 
     /**
@@ -144,7 +148,9 @@ public class VolumeService extends Service {
         audio.registerAudioPlaybackCallback(playbackCallback, handler);
         audio.registerAudioDeviceCallback(deviceCallback, handler);
         connectAll();
-        handler.post(pollRunnable);
+        wasPlaying = !audio.getActivePlaybackConfigurations().isEmpty();
+        hearingAidOutput = hasHearingAidOutput();
+        updatePolling();
         handler.postDelayed(checkRunnable, CHECK_MS);
     }
 
@@ -250,6 +256,34 @@ public class VolumeService extends Service {
             handler.postDelayed(this, POLL_MS);
         }
     };
+
+    private boolean hasHearingAidOutput() {
+        for (AudioDeviceInfo d : audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            if (d.getType() == AudioDeviceInfo.TYPE_HEARING_AID) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Polls only while something plays to a hearing aid output. A change made while
+     * polling is off is still caught by VOLUME_CHANGED_ACTION, and the next playback
+     * start triggers writes of its own.
+     */
+    private void updatePolling() {
+        boolean want = wasPlaying && hearingAidOutput;
+        if (want == polling) {
+            return;
+        }
+        polling = want;
+        Log.i(TAG, "polling " + (want ? "on" : "off"));
+        if (want) {
+            handler.post(pollRunnable);
+        } else {
+            handler.removeCallbacks(pollRunnable);
+        }
+    }
 
     private void writeAll() {
         Integer db = targetDb();
@@ -390,12 +424,15 @@ public class VolumeService extends Service {
                 scheduleWrites("playback started");
             }
             wasPlaying = playing;
+            updatePolling();
         }
     };
 
     private final AudioDeviceCallback deviceCallback = new AudioDeviceCallback() {
         @Override
         public void onAudioDevicesAdded(AudioDeviceInfo[] added) {
+            hearingAidOutput = hasHearingAidOutput();
+            updatePolling();
             for (AudioDeviceInfo d : added) {
                 if (d.getType() == AudioDeviceInfo.TYPE_HEARING_AID) {
                     // Catches a newly bonded device whose name was not known at bond time.
@@ -405,6 +442,12 @@ public class VolumeService extends Service {
                     return;
                 }
             }
+        }
+
+        @Override
+        public void onAudioDevicesRemoved(AudioDeviceInfo[] removed) {
+            hearingAidOutput = hasHearingAidOutput();
+            updatePolling();
         }
     };
 

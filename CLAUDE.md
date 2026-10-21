@@ -17,7 +17,8 @@ are in `TODO.md`.
 ## Hardware and environment
 
 - Phone: Motorola edge 40 neo (manaus), Android 15 (SDK 35), MediaTek.
-  Reached through adb over Wi-Fi (TLS pairing); `adb devices` shows one device.
+  Reached through adb over Wi-Fi (TLS pairing). `adb devices` may list the phone
+  twice (two mDNS TLS entries); then pick one with `adb -s <id>`.
 - Hearing devices: two Cochlear processors, bonded LE devices named
   "<owner> Hearing Devi".
   Companion app `com.cochlear.clientremote` (Nucleus Smart).
@@ -40,6 +41,9 @@ Three classes, no Gradle:
   `WRITE_TYPE_NO_RESPONSE`. Triggers, each followed by a burst of retries
   (`RETRY_DELAYS_MS`):
   - polling `getStreamVolume(STREAM_MUSIC)` every `POLL_MS` (immediate write on change),
+    only while some playback is active and a `TYPE_HEARING_AID` output exists
+    (`updatePolling`). Polling all the time cost 37 % battery overnight: the
+    CPU is awake much of the time with the screen off.
   - `VOLUME_CHANGED_ACTION` for `STREAM_MUSIC` (backup, arrives ~0.5 s late),
   - AudioStatusPoint notification (each ASHA Start command),
   - `AudioDeviceCallback` adding `TYPE_HEARING_AID`, services discovered,
