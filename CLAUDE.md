@@ -43,7 +43,8 @@ Three classes, no Gradle:
   - polling `getStreamVolume(STREAM_MUSIC)` every `POLL_MS` (immediate write on change),
     only while some playback is active and a `TYPE_HEARING_AID` output exists
     (`updatePolling`). Polling all the time cost 37 % battery overnight: the
-    CPU is awake much of the time with the screen off.
+    CPU is awake much of the time with the screen off. Verified after the
+    change: 2.4 mAh and 1m20s CPU per day (before: ~32 mAh and ~31 min).
   - `VOLUME_CHANGED_ACTION` for `STREAM_MUSIC` (backup, arrives ~0.5 s late),
   - AudioStatusPoint notification (each ASHA Start command),
   - `AudioDeviceCallback` adding `TYPE_HEARING_AID`, services discovered,

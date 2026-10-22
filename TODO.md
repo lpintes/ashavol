@@ -3,8 +3,6 @@
 - Consider a non-linear table if 4.5 dB linear steps feel uneven.
 - Replace the `com.example.ashavol` package name (requires uninstall, the
   stored table is lost).
-- Compare battery stats a day after polling was limited to active playback
-  (stats reset 2026-10-21 08:57).
 - The `TYPE_HEARING_AID` output disappears ~10 s after playback ends, and the
   music index then switches to the speaker's value. A poll can see that index
   before the removal callback and write a burst for it (seen: speaker index 2
