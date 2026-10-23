@@ -19,6 +19,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
+import android.media.AudioAttributes;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
@@ -104,7 +105,9 @@ public class VolumeService extends Service {
     private boolean wasPlaying;
     private boolean hearingAidOutput;
     private boolean polling;
+    private int lastStream = -1;
     private int lastIndex = -1;
+    private boolean inCall;
 
     /**
      * Prefs live in device-protected storage so that the service can read the
@@ -147,7 +150,9 @@ public class VolumeService extends Service {
                 Context.RECEIVER_EXPORTED);
         audio.registerAudioPlaybackCallback(playbackCallback, handler);
         audio.registerAudioDeviceCallback(deviceCallback, handler);
+        audio.addOnModeChangedListener(handler::post, modeListener);
         connectAll();
+        inCall = isCallMode(audio.getMode());
         wasPlaying = !audio.getActivePlaybackConfigurations().isEmpty();
         hearingAidOutput = hasHearingAidOutput();
         updatePolling();
@@ -176,6 +181,7 @@ public class VolumeService extends Service {
         unregisterReceiver(aclReceiver);
         audio.unregisterAudioPlaybackCallback(playbackCallback);
         audio.unregisterAudioDeviceCallback(deviceCallback);
+        audio.removeOnModeChangedListener(modeListener);
         for (BluetoothGatt g : gatts.values()) {
             g.close();
         }
@@ -221,17 +227,51 @@ public class VolumeService extends Service {
         return right ? rightOffsetDb : leftOffsetDb;
     }
 
-    /** Maps the current music index to dB; null means leave Android's value alone. */
+    /**
+     * The stream whose index Android sends to the hearing devices, mirroring
+     * AudioService.getBluetoothContextualVolumeStream: the voice call stream during
+     * a call or VoIP session, or while voice communication plays; music otherwise.
+     */
+    private int volumeStream() {
+        switch (audio.getMode()) {
+            case AudioManager.MODE_IN_CALL:
+            case AudioManager.MODE_IN_COMMUNICATION:
+                return AudioManager.STREAM_VOICE_CALL;
+            case AudioManager.MODE_NORMAL:
+            case AudioManager.MODE_RINGTONE:
+                for (AudioPlaybackConfiguration c : audio.getActivePlaybackConfigurations()) {
+                    if (c.getAudioAttributes().getUsage()
+                            == AudioAttributes.USAGE_VOICE_COMMUNICATION) {
+                        return AudioManager.STREAM_VOICE_CALL;
+                    }
+                }
+                return AudioManager.STREAM_MUSIC;
+            default:
+                return AudioManager.STREAM_MUSIC;
+        }
+    }
+
+    private static String streamName(int stream) {
+        return stream == AudioManager.STREAM_VOICE_CALL ? "call" : "music";
+    }
+
+    /**
+     * Maps the index of the stream Android follows to dB; null means leave Android's
+     * value alone. The lowest index of the stream (1 for calls) maps to min.
+     */
     private Integer targetDb() {
-        int index = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-        int top = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        int stream = volumeStream();
+        int index = audio.getStreamVolume(stream);
+        int bottom = Math.max(1, audio.getStreamMinVolume(stream));
+        int top = audio.getStreamMaxVolume(stream);
         if (index <= 0) {
             return null;
         }
-        if (top <= 1) {
+        if (top <= bottom) {
             return minDb;
         }
-        return minDb + Math.round((float) (maxDb - minDb) * (index - 1) / (top - 1));
+        return minDb + Math.round((float) (maxDb - minDb)
+                * (Math.min(Math.max(index, bottom), top) - bottom) / (top - bottom));
     }
 
     private void scheduleWrites(String reason) {
@@ -247,11 +287,13 @@ public class VolumeService extends Service {
     private final Runnable pollRunnable = new Runnable() {
         @Override
         public void run() {
-            int index = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-            if (index != lastIndex) {
+            int stream = volumeStream();
+            int index = audio.getStreamVolume(stream);
+            if (stream != lastStream || index != lastIndex) {
+                lastStream = stream;
                 lastIndex = index;
                 writeAll();
-                scheduleWrites("polled index " + index);
+                scheduleWrites("polled " + streamName(stream) + " index " + index);
             }
             handler.postDelayed(this, POLL_MS);
         }
@@ -267,12 +309,13 @@ public class VolumeService extends Service {
     }
 
     /**
-     * Polls only while something plays to a hearing aid output. A change made while
-     * polling is off is still caught by VOLUME_CHANGED_ACTION, and the next playback
-     * start triggers writes of its own.
+     * Polls only while something plays, or a call runs, with a hearing aid output.
+     * Call audio need not show up as a player. A change made while polling is off is
+     * still caught by VOLUME_CHANGED_ACTION, and the next playback start triggers
+     * writes of its own.
      */
     private void updatePolling() {
-        boolean want = wasPlaying && hearingAidOutput;
+        boolean want = (wasPlaying || inCall) && hearingAidOutput;
         if (want == polling) {
             return;
         }
@@ -407,11 +450,22 @@ public class VolumeService extends Service {
         @Override
         public void onReceive(Context context, Intent intent) {
             int stream = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1);
-            if (stream == AudioManager.STREAM_MUSIC) {
-                scheduleWrites("volume index "
+            if (stream == AudioManager.STREAM_MUSIC || stream == AudioManager.STREAM_VOICE_CALL) {
+                scheduleWrites(streamName(stream) + " index "
                         + intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_VALUE", -1));
             }
         }
+    };
+
+    private static boolean isCallMode(int mode) {
+        return mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION;
+    }
+
+    // Entering or leaving a call switches Android to the other stream's volume.
+    private final AudioManager.OnModeChangedListener modeListener = mode -> {
+        inCall = isCallMode(mode);
+        scheduleWrites("audio mode " + mode);
+        updatePolling();
     };
 
     private final AudioManager.AudioPlaybackCallback playbackCallback =

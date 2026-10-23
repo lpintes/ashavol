@@ -9,6 +9,12 @@
   vs hearing aid index 1). Nothing plays at that moment and the next Start
   rewrites the volume, but it is a louder value than intended; consider
   ignoring index changes when no hearing aid output is present.
+- Sometimes only one processor connects for streaming after a service restart
+  (e.g. `adb install -r`) or after switching from the TV Streamer back to the
+  phone; the user has to disconnect and reconnect them, sometimes several
+  times. Not yet known whether our GATT client causes it. Next time, capture
+  `adb logcat -b all` around the event and compare `hearing_aid.cc`
+  OnGattConnected / ConnectSocket for both sides with our `state=` lines.
 - Watchdog log noise: while the processors are off, it recreates both clients
   every minute and logs 3 lines per side (116 recreations in one hour off).
   Log only the first recreation per disconnect, or back off the interval.

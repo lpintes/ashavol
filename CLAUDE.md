@@ -40,16 +40,23 @@ Three classes, no Gradle:
   while the link was up. It writes a signed byte to the ASHA Volume characteristic with
   `WRITE_TYPE_NO_RESPONSE`. Triggers, each followed by a burst of retries
   (`RETRY_DELAYS_MS`):
-  - polling `getStreamVolume(STREAM_MUSIC)` every `POLL_MS` (immediate write on change),
-    only while some playback is active and a `TYPE_HEARING_AID` output exists
+  The followed stream is `volumeStream()`: `STREAM_VOICE_CALL` in mode
+  IN_CALL/IN_COMMUNICATION or while a `USAGE_VOICE_COMMUNICATION` player is
+  active in NORMAL/RINGTONE mode, otherwise `STREAM_MUSIC` (mirrors AOSP
+  `getBluetoothContextualVolumeStream`).
+  - polling the followed stream's index every `POLL_MS` (immediate write on
+    change of stream or index), only while some playback is active or a call
+    mode is set, and a `TYPE_HEARING_AID` output exists
     (`updatePolling`). Polling all the time cost 37 % battery overnight: the
     CPU is awake much of the time with the screen off. Verified after the
     change: 2.4 mAh and 1m20s CPU per day (before: ~32 mAh and ~31 min).
-  - `VOLUME_CHANGED_ACTION` for `STREAM_MUSIC` (backup, arrives ~0.5 s late),
+  - `VOLUME_CHANGED_ACTION` for music or voice call (backup, arrives ~0.5 s late),
+  - audio mode change (`OnModeChangedListener`),
   - AudioStatusPoint notification (each ASHA Start command),
   - `AudioDeviceCallback` adding `TYPE_HEARING_AID`, services discovered,
     playback start, service start.
-  Index 0 is left to Android. Index 1..max maps linearly to `min..max` dB,
+  Index 0 is left to Android. The stream's lowest index (1 for music and
+  calls) .. max maps linearly to `min..max` dB, the same table for both,
   plus a per-side offset `left`/`right` (side from bit 0 of byte 1 of the ASHA
   ReadOnlyProperties characteristic, read before the device counts as ready;
   an unknown side gets the quieter offset). Every written value is clamped to
@@ -81,6 +88,12 @@ Three classes, no Gradle:
   music index 0 → -128 (mute), 1..15 → -42..0 dB in ~3 dB steps. The
   `DEVICE_CATEGORY_HEARING_AID` curves in `dumpsys media.audio_policy` are
   not what is used. Not changeable without root.
+- During a phone call Android sends the voice call index (1..8 on this phone)
+  to the hearing devices: index 1 → -47, 2 → -45, 3 → -41, 4 → -37 dB. Verified
+  with a test call; with the service following that stream, the call is
+  comfortable at every tried index. At call start the poll briefly sees the
+  earpiece index (6) before the hearing aid index (1); the value written for it
+  is still far below Android's.
 - The processors accept volume writes from a second GATT client and go far
   below -42 dB. Comfortable range for this user: about -127..-64 dB.
 - At index 0 the PCM is muted, so keeping Android at 0 and writing our own
